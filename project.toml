@@ -1,0 +1,29 @@
+[project]
+name = "qm9-molecular-property-regression"
+benchmark = "qm9_regression"
+metric = "mae"
+objective = "minimize"
+registry_dir = "registry"
+artifact_dir = "runs"
+claim_ttl_seconds = 1800
+simulated_runtime_seconds = 0.0
+leaderboard_limit = 10
+target = "gap"
+split = "qm9_fixed_v1"
+
+[runner]
+entry = "research_community.projects"
+evaluate = "evaluate_config"
+canonicalize = "canonicalize_config"
+
+[search]
+default_seed_pool = [7, 13, 21, 42]
+
+[benchmark.qm9_regression]
+dataset_path = "data/qm9.csv"
+dataset_format = "csv"
+smiles_column = "smiles"
+target_column = "gap"
+split_train_fraction = 0.8
+split_val_fraction = 0.1
+notes = "Place a QM9 CSV at data/qm9.csv before launching agents."
