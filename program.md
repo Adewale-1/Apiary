@@ -1,7 +1,7 @@
 # autoresearch-community
 
-This is an experiment to have multiple LLM researchers run autonomous ML
-experiments in parallel while sharing memory of what has already been tried.
+Multiple LLM researchers run autonomous ML experiments in parallel while
+sharing memory of what has already been tried.
 
 ## Setup
 
@@ -15,123 +15,122 @@ To set up a new experiment run, work with the user to:
    "How many subagents should I spin up?"
 3. Read the in-scope files for context:
    - `README.md`
-   - `project.toml`
+   - `autoresearch.toml`
+   - `SCOPE.md`
    - `program.md`
-   - `research_community/projects.py`
-4. Verify the dataset exists.
-   Check that the dataset referenced by `project.toml` exists. If not, stop and
-   tell the human what file is missing.
-5. Create the registry layout.
-   If the shared directories do not exist yet, create them automatically:
+4. Verify any data dependencies described in `SCOPE.md` exist.
+   If something is missing, stop and tell the human what file is needed.
+5. Create the registry layout if the directories do not exist yet:
    - `registry/claims/`
    - `registry/results/`
    - `registry/leaderboard/`
    - `runs/`
-   Only stop if directory creation fails and after several attempts to create it,it still fails.
 6. Establish one shared baseline.
-   If there are no completed results yet for this run, exactly one agent should
-   claim and execute the baseline configuration or baseline experiment path for
-   the project. All other agents should wait until that baseline appears in
-   shared memory.
-   Do not have every subagent run its own baseline.
-7. Assign search shards across subagents.
-   If the project docs define explicit experiment groups, use them.
-   Otherwise derive distinct, minimally overlapping regions of the search space
-   from the project's goal and codebase.
+   Exactly one agent claims and executes the baseline. All others wait.
+7. Assign search shards across subagents using the guidance below.
 8. Confirm and go.
-   Once setup looks good, begin the autonomous experimentation loop.
 
-## Experimentation
+## Two ways to run an experiment
 
-Each subagent is an autonomous researcher. Its job is to decide exactly one
-novel structured experiment config at a time, execute it, inspect the result,
-and continue indefinitely until interrupted by the human.
+### Config search — `execute_config`
 
-The project-side experiment implementation lives in `research_community/projects.py`
-or whatever experiment runner the project uses. The orchestration and memory
-system lives in the other `research_community/*.py` files.
-
-## What you CAN do
-
-- Read `registry/results/` and `registry/claims/` before every proposal.
-- Decide structured experiment configs within your assigned search group.
-- Execute one config at a time with the shared execution primitive:
+The agent proposes a JSON config. The framework calls `evaluate_config` in
+the runner file and records the result. No files are modified.
 
 ```python
 from research_community.agent import AgentSettings, execute_config
 from research_community.contracts import load_project_contract
 from research_community.registry import ExperimentRegistry
 
-contract = load_project_contract("project.toml")
+contract = load_project_contract("autoresearch.toml")
 registry = ExperimentRegistry(contract)
-settings = AgentSettings(
-    agent_id="<agent-id>",
-    branch="<branch>",
-    search_group="<group>",
-    max_experiments=1,
-)
+settings = AgentSettings(agent_id="<id>", branch="<branch>", search_group="<group>")
 execute_config(contract, registry, settings, config)
 ```
 
-- Use prior completed results to decide whether to explore, exploit, or wait.
-- Let ensemble-style agents depend on strong upstream results rather than running
-  blindly.
+The runner must expose:
 
-## What you CANNOT do in Phase 1
+```python
+def evaluate_config(config: dict, prior_results: list[dict]) -> dict:
+    return {"metric_name": "mae", "metric_value": 0.42, "status": "completed"}
+```
 
-- Do not edit project code as part of the experiment loop.
-- Do not modify `research_community/projects.py` while running experiments.
-- Do not install new dependencies.
-- Do not bypass the registry by running experiments without claiming them.
+### Code-editing search — `execute_code_experiment`
 
-## Goal
+The agent edits the mutable files listed in `SCOPE.md`, then calls the
+primitive. The framework runs the configured shell command, parses the metric,
+commits (if improved) or reverts (if not), and records the result.
 
-The goal is simple: find the best metric for the configured project while
-preserving reproducibility and avoiding duplicate work.
+```python
+from research_community.agent import AgentSettings, execute_code_experiment
+from research_community.contracts import load_project_contract
+from research_community.registry import ExperimentRegistry
 
-All experiment knowledge must flow through the registry:
+contract = load_project_contract("autoresearch.toml")
+registry = ExperimentRegistry(contract)
+settings = AgentSettings(agent_id="<id>", branch="<branch>", search_group="<group>")
+# --- edit the mutable files listed in SCOPE.md here ---
+execute_code_experiment(contract, registry, settings, description="<what you tried>")
+```
 
-- `registry/claims/` for live claims
-- `registry/results/` for completed immutable records
-- `registry/leaderboard/snapshot.json` for the derived leaderboard
+Agents using `execute_code_experiment` must run in **separate git worktrees**
+because they modify shared files.
 
-The first completed result for a run should normally be the shared baseline.
+## Result statuses
+
+| Status | Meaning |
+| ------ | ------- |
+| `completed` | Config run — produced a metric |
+| `keep` | Code-editing run — metric improved, change committed |
+| `discard` | Code-editing run — metric did not improve, change reverted |
+| `failed` | Any run — crash, timeout, or metric not parseable |
+
+`discard` is not a failure. The experiment ran, the metric was captured, and
+the idea is permanently recorded so no other agent wastes time on it.
+
+## What you CAN do
+
+- Read `registry/results/` and `registry/claims/` before every proposal.
+- Propose a config or edit mutable files, then call the appropriate primitive.
+- Use prior results to decide whether to explore, exploit, or wait.
+- Let synthesis agents depend on upstream results.
+
+## What you CANNOT do
+
+- Modify files listed as frozen in `SCOPE.md`.
+- Install new dependencies.
+- Bypass the registry by running experiments without claiming them.
+- Edit the orchestration layer (`research_community/`).
 
 ## The experiment loop
 
-Each subagent runs on its own logical branch, such as
-`autoresearch/<tag>-agent-001`.
-
 LOOP FOREVER:
 
-1. Read the current registry state:
-   - completed results in `registry/results/`
-   - live claims in `registry/claims/`
-   - the derived leaderboard if helpful
-2. If no shared baseline exists yet, only one agent should claim and run it.
-   All other agents should wait for the baseline result instead of inventing
-   their own.
-3. Once the baseline exists, think of one experimental idea inside your
-   assigned search shard.
-4. Check whether that exact config has already been completed or claimed.
-5. If duplicate, think harder and choose a different config.
-6. If novel, execute it with the shared execution primitive.
+1. Read `registry/results/`, `registry/claims/`, and the leaderboard.
+2. If no baseline exists yet, only one agent claims and runs it. Others wait.
+3. Think of one experimental idea inside your assigned search shard.
+4. Check whether that exact config or code change has already been tried.
+5. If duplicate, choose a different idea.
+6. Execute via the appropriate primitive.
 7. Inspect the returned metric and updated leaderboard.
 8. Use the new shared memory to decide the next experiment.
 9. Never stop unless the human interrupts you.
 
-## Subagent behavior
+## Sharding guidance
 
-- Stay within the search region assigned to you for the current project.
-- Avoid overlapping heavily with other subagents unless the project explicitly benefits from redundancy.
-- Prefer high-signal experiments that are meaningfully distinct from completed and currently claimed work.
-- If your role depends on upstream results, wait until enough useful completed work exists before acting.
-- Treat the baseline as a shared project-level reference point, not a per-agent ritual.
+Assign subagents to distinct, minimally overlapping regions of the search space.
+
+Examples:
+
+- model families
+- optimization strategies
+- architecture variants
+- feature or preprocessing choices
+- exploitation of top results
+- ensemble or synthesis work
 
 ## Output discipline
 
-- Emit only structured configs for execution, not prose.
 - Keep rationale short and high-signal.
-- Respect live claims to avoid duplicated work.
-- Prefer novel experiments over repeated tiny perturbations.
+- Respect live claims.
 - Continue autonomously until manually stopped.

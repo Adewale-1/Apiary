@@ -1,29 +1,25 @@
+# type:ignore
 from __future__ import annotations
-
 from dataclasses import dataclass
 import importlib
 import importlib.util
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable
-
 from .contracts import ProjectContract
 
-
-EvaluateFn = Callable[[ProjectContract, dict[str, Any], list[dict[str, Any]]], dict[str, Any]]
-CanonicalizeFn = Callable[[ProjectContract, dict[str, Any]], dict[str, Any]]
-
+EvaluateFn = Callable[[dict[str, Any], list[dict[str, Any]]], dict[str, Any]]
+CanonicalizeFn = Callable[[dict[str, Any]], dict[str, Any]]
 
 @dataclass(frozen=True)
 class RunnerAdapter:
     evaluate_config: EvaluateFn
     canonicalize_config: CanonicalizeFn
 
+_ADAPTER_CACHE: dict[tuple[str, str, str, str], RunnerAdapter] = {}
 
-def _identity_canonicalize(contract: ProjectContract, config: dict[str, Any]) -> dict[str, Any]:
-    del contract
+def _identity_canonicalize(config: dict[str, Any]) -> dict[str, Any]:
     return config
-
 
 def _load_module_from_path(path: Path) -> ModuleType:
     module_name = f"research_project_runner_{abs(hash(str(path.resolve())))}"
@@ -33,7 +29,6 @@ def _load_module_from_path(path: Path) -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
-
 
 def _resolve_runner_module(contract: ProjectContract) -> ModuleType:
     entry = contract.runner_entry
@@ -47,15 +42,24 @@ def _resolve_runner_module(contract: ProjectContract) -> ModuleType:
         return _load_module_from_path(candidate)
     return importlib.import_module(entry)
 
-
 def load_runner_adapter(contract: ProjectContract) -> RunnerAdapter:
+    cache_key = (
+        str(contract.project_file),
+        contract.runner_entry,
+        contract.runner_evaluate,
+        contract.runner_canonicalize,
+    )
+    cached = _ADAPTER_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     module = _resolve_runner_module(contract)
 
     evaluate = getattr(module, contract.runner_evaluate, None)
     if evaluate is None or not callable(evaluate):
         raise AttributeError(
             f"Runner '{contract.runner_entry}' does not define callable "
-            f"'{contract.runner_evaluate}(contract, config, prior_results)'"
+            f"'{contract.runner_evaluate}(config, prior_results)'"
         )
 
     canonicalize = getattr(module, contract.runner_canonicalize, None)
@@ -67,7 +71,9 @@ def load_runner_adapter(contract: ProjectContract) -> RunnerAdapter:
             "but it is not callable"
         )
 
-    return RunnerAdapter(
+    adapter = RunnerAdapter(
         evaluate_config=evaluate,
         canonicalize_config=canonicalize,
     )
+    _ADAPTER_CACHE[cache_key] = adapter
+    return adapter

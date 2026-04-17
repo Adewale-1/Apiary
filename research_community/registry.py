@@ -1,5 +1,5 @@
+# type:ignore
 from __future__ import annotations
-
 from dataclasses import dataclass
 import json
 import os
@@ -7,16 +7,13 @@ from pathlib import Path
 import time
 from typing import Any
 import uuid
-
 from .contracts import ProjectContract
 from .leaderboard import build_leaderboard_snapshot, write_leaderboard
-
 
 @dataclass(frozen=True)
 class ClaimAttempt:
     accepted: bool
     reason: str
-
 
 class ExperimentRegistry:
     def __init__(self, contract: ProjectContract) -> None:
@@ -91,15 +88,38 @@ class ExperimentRegistry:
             else:
                 return ClaimAttempt(accepted=False, reason="claimed")
 
+        tmp_path = claim_path.with_name(f"{claim_path.name}.{uuid.uuid4().hex}.tmp")
+        tmp_path.write_text(json.dumps(claim_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         try:
-            fd = os.open(claim_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.link(tmp_path, claim_path)
         except FileExistsError:
             return ClaimAttempt(accepted=False, reason="claimed")
-
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(claim_payload, handle, indent=2, sort_keys=True)
-            handle.write("\n")
+        finally:
+            try:
+                tmp_path.unlink()
+            except FileNotFoundError:
+                pass
         return ClaimAttempt(accepted=True, reason="accepted")
+
+    def refresh_claim(
+        self,
+        fingerprint: str,
+        agent_id: str,
+        ttl_seconds: float | None = None,
+    ) -> bool:
+        claim_path = self._claim_path(fingerprint)
+        if not claim_path.exists():
+            return False
+        try:
+            claim = self._load_json(claim_path)
+        except json.JSONDecodeError:
+            return False
+        if claim.get("agent_id") != agent_id:
+            return False
+        ttl = ttl_seconds if ttl_seconds is not None else self.contract.claim_ttl_seconds
+        claim["expires_at"] = time.time() + float(ttl)
+        self._write_json_atomic(claim_path, claim)
+        return True
 
     def release_claim(self, fingerprint: str, agent_id: str) -> None:
         claim_path = self._claim_path(fingerprint)

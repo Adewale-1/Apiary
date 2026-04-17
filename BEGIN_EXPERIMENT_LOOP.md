@@ -7,41 +7,65 @@ user says:
 
 ## Assistant behavior
 
-1. Read `program.md` and `project.toml`.
-2. Ask the user one short question if the number of subagents is not specified:
+1. Read `program.md`, `SCOPE.md`, and `autoresearch.toml`.
+1. Ask the user one short question if the number of subagents is not specified:
    "How many subagents should I spin up?"
-3. Treat each subagent as an autonomous researcher assigned to a distinct region
+1. Determine which execution mode to use from `autoresearch.toml`:
+   - **`execute_config`** — `[runner]` is set, no `[code_experiment]` section →
+     agents propose JSON configs, no files are modified.
+   - **`execute_code_experiment`** — `[code_experiment]` is set → agents edit
+     the mutable files listed in `SCOPE.md`.
+1. Treat each subagent as an autonomous researcher assigned to a distinct region
    of the current project's search space.
-4. Before proposing each experiment, inspect:
+1. Before proposing each experiment, inspect:
    - `registry/results/`
    - `registry/claims/`
-5. Each subagent should decide exactly one structured config at a time.
-6. Execute each config by calling the shared execution primitive directly:
+
+## Config search primitive
 
 ```python
 from research_community.agent import AgentSettings, execute_config
 from research_community.contracts import load_project_contract
 from research_community.registry import ExperimentRegistry
 
-contract = load_project_contract("project.toml")
+contract = load_project_contract("autoresearch.toml")
 registry = ExperimentRegistry(contract)
 settings = AgentSettings(
     agent_id="<agent-id>",
     branch="<branch>",
     search_group="<group>",
-    max_experiments=1,
 )
 execute_config(contract, registry, settings, config)
 ```
 
-7. Repeat until the requested experiment budget is exhausted or the user stops
-   the loop.
+## Code-editing search primitive
 
-## Sharding Guidance
+Edit the mutable files listed in `SCOPE.md` first, then call:
+
+```python
+from research_community.agent import AgentSettings, execute_code_experiment
+from research_community.contracts import load_project_contract
+from research_community.registry import ExperimentRegistry
+
+contract = load_project_contract("autoresearch.toml")
+registry = ExperimentRegistry(contract)
+settings = AgentSettings(
+    agent_id="<agent-id>",
+    branch="<branch>",
+    search_group="<group>",
+)
+# --- edit mutable files here ---
+execute_code_experiment(contract, registry, settings, description="<what you tried>")
+```
+
+Agents using `execute_code_experiment` must run in **separate git worktrees**
+so file edits do not interfere with each other.
+
+## Sharding guidance
 
 Assign subagents to distinct, minimally overlapping regions of the search space.
 If the project docs define explicit experiment groups, use them.
-Otherwise derive the groups yourself from the project goal, codebase, and prior results.
+Otherwise derive the groups from the project goal, prior results, and scope.
 
 Examples of project-derived sharding:
 
@@ -54,7 +78,7 @@ Examples of project-derived sharding:
 
 ## Output discipline
 
-- Propose only structured configs, not code edits.
+- Propose only structured configs or targeted code edits.
 - Respect completed results and live claims.
 - Prefer novel, high-signal experiments.
 - Record all execution through the registry.

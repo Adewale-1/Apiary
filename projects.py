@@ -1,5 +1,5 @@
-#type:ignore
 from __future__ import annotations
+
 from dataclasses import dataclass
 from functools import lru_cache
 import hashlib
@@ -11,7 +11,6 @@ from typing import Any
 import csv
 
 import numpy as np
-from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.ensemble import ExtraTreesRegressor, HistGradientBoostingRegressor, RandomForestRegressor
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.pipeline import FeatureUnion
@@ -19,8 +18,18 @@ from sklearn.linear_model import ElasticNet, Ridge
 from sklearn.metrics import mean_absolute_error
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+from sklearn.base import BaseEstimator, TransformerMixin
 
-from .contracts import ProjectContract
+# ---------------------------------------------------------------------------
+# Project-specific constants — edit these when adapting to a new experiment.
+# ---------------------------------------------------------------------------
+_DATASET_PATH = Path("data/qm9.csv")
+_SMILES_COLUMN = "smiles"
+_TARGET_COLUMN = "gap"
+_SPLIT_NAME = "qm9_fixed_v1"
+_TRAIN_FRACTION = 0.8
+_VAL_FRACTION = 0.1
+_METRIC_NAME = "mae"
 
 
 FEATURE_SET_PENALTY = {
@@ -41,113 +50,6 @@ def _noise(seed_key: str) -> float:
     digest = hashlib.sha256(seed_key.encode("utf-8")).hexdigest()
     sample = int(digest[:8], 16) / 0xFFFFFFFF
     return (sample - 0.5) * 0.01
-
-
-def _toy_regression_score(config: dict[str, Any], prior_results: list[dict[str, Any]]) -> float:
-    family = config["model_family"]
-    feature_set = config.get("feature_set", "baseline")
-    seed_key = f"{family}:{config}"
-    noise = _noise(seed_key)
-    feature_penalty = FEATURE_SET_PENALTY.get(feature_set, 0.050)
-
-    if family == "ridge":
-        alpha = float(config["params"]["alpha"])
-        score = 0.52 + abs(math.log10(alpha) + 1.1) * 0.04 + feature_penalty + noise
-    elif family == "elasticnet":
-        alpha = float(config["params"]["alpha"])
-        l1_ratio = float(config["params"]["l1_ratio"])
-        score = (
-            0.48
-            + abs(math.log10(alpha) + 1.4) * 0.03
-            + abs(l1_ratio - 0.35) * 0.04
-            + feature_penalty
-            + noise
-        )
-    elif family == "random_forest":
-        max_depth = int(config["params"]["max_depth"])
-        n_estimators = int(config["params"]["n_estimators"])
-        score = (
-            0.44
-            + abs(max_depth - 10) * 0.010
-            + abs(n_estimators - 400) / 600 * 0.03
-            + feature_penalty * 0.5
-            + noise
-        )
-    elif family == "hist_gb":
-        learning_rate = float(config["params"]["learning_rate"])
-        max_depth = int(config["params"]["max_depth"])
-        max_leaf_nodes = int(config["params"]["max_leaf_nodes"])
-        score = (
-            0.36
-            + abs(learning_rate - 0.08) * 0.6
-            + abs(max_depth - 7) * 0.012
-            + abs(max_leaf_nodes - 31) * 0.002
-            + feature_penalty * 0.5
-            + noise
-        )
-    elif family == "ensemble":
-        members = config["members"]
-        resolved = [item for item in prior_results if item["fingerprint"] in members]
-        if len(resolved) < 2:
-            score = 0.60 + noise
-        else:
-            member_scores = sorted(item["metric_value"] for item in resolved)[:2]
-            diversity_bonus = 0.015 if len({item["config"]["model_family"] for item in resolved}) > 1 else 0.005
-            score = sum(member_scores) / len(member_scores) - diversity_bonus + noise
-    else:
-        raise ValueError(f"Unsupported benchmark config family: {family}")
-
-    return round(score, 6)
-
-
-def evaluate_config(
-    contract: ProjectContract,
-    config: dict[str, Any],
-    prior_results: list[dict[str, Any]],
-) -> dict[str, Any]:
-    if contract.benchmark == "toy_regression":
-        metric_value = _toy_regression_score(config, prior_results)
-        return {
-            "metric_name": contract.metric,
-            "metric_value": metric_value,
-            "status": "completed",
-            "artifact_payload": {"simulated": True},
-        }
-
-    if contract.benchmark == "qm9_regression":
-        return _evaluate_qm9_config(contract, config, prior_results)
-
-    raise NotImplementedError(
-        f"Benchmark '{contract.benchmark}' is not implemented yet. "
-        "The scaffold is ready for a real project adapter next."
-    )
-
-
-def canonicalize_config(contract: ProjectContract, config: dict[str, Any]) -> dict[str, Any]:
-    """
-    Return a canonical experiment identity for deduplication.
-
-    Project adapters can normalize away fields that do not materially change the
-    experiment. For QM9, some linear models are deterministic, so varying only
-    the seed should not create four separate "novel" experiments.
-    """
-
-    if contract.benchmark != "qm9_regression":
-        return config
-
-    canonical = json.loads(json.dumps(config))
-    model_family = canonical.get("model_family")
-    if model_family in {"ridge", "elasticnet"}:
-        canonical["seed"] = "deterministic"
-    return canonical
-
-
-def choose_feature_set(rng: random.Random) -> str:
-    return rng.choice(list(FEATURE_SET_PENALTY))
-
-
-def _benchmark_config(contract: ProjectContract) -> dict[str, Any]:
-    return contract.raw["benchmark"]["qm9_regression"]
 
 
 @lru_cache(maxsize=4)
@@ -171,7 +73,7 @@ def _load_qm9_dataset_cached(
         reader = csv.DictReader(handle)
         if reader.fieldnames is None:
             raise ValueError("QM9 CSV is missing a header row.")
-        missing = [column for column in [smiles_column, target_column] if column not in reader.fieldnames]
+        missing = [col for col in [smiles_column, target_column] if col not in reader.fieldnames]
         if missing:
             raise ValueError(f"QM9 dataset is missing required columns: {missing}")
         for row in reader:
@@ -186,19 +88,11 @@ def _load_qm9_dataset_cached(
     return tuple(smiles), tuple(targets)
 
 
-def _load_qm9_dataset(contract: ProjectContract) -> tuple[list[str], np.ndarray]:
-    config = _benchmark_config(contract)
-    dataset_path = Path(config["dataset_path"])
+def _load_qm9_dataset() -> tuple[list[str], np.ndarray]:
+    dataset_path = _DATASET_PATH
     if not dataset_path.is_absolute():
-        dataset_path = (contract.root_dir / dataset_path).resolve()
-
-    dataset_format = config.get("dataset_format", "csv")
-    if dataset_format != "csv":
-        raise ValueError(f"Unsupported dataset format: {dataset_format}")
-
-    smiles_column = config.get("smiles_column", "smiles")
-    target_column = config.get("target_column", contract.target)
-    smiles, targets = _load_qm9_dataset_cached(str(dataset_path), smiles_column, target_column)
+        dataset_path = dataset_path.resolve()
+    smiles, targets = _load_qm9_dataset_cached(str(dataset_path), _SMILES_COLUMN, _TARGET_COLUMN)
     return list(smiles), np.asarray(targets, dtype=float)
 
 
@@ -243,23 +137,17 @@ def _split_qm9_cached(
     )
 
 
-def _split_qm9(smiles: list[str], targets: np.ndarray, contract: ProjectContract) -> tuple[QM9Split, QM9Split, QM9Split]:
-    del smiles, targets
-    config = _benchmark_config(contract)
-    dataset_path = Path(config["dataset_path"])
+def _split_qm9() -> tuple[QM9Split, QM9Split, QM9Split]:
+    dataset_path = _DATASET_PATH
     if not dataset_path.is_absolute():
-        dataset_path = (contract.root_dir / dataset_path).resolve()
-    smiles_column = config.get("smiles_column", "smiles")
-    target_column = config.get("target_column", contract.target)
-    train_fraction = float(config.get("split_train_fraction", 0.8))
-    val_fraction = float(config.get("split_val_fraction", 0.1))
+        dataset_path = dataset_path.resolve()
     return _split_qm9_cached(
         str(dataset_path),
-        smiles_column,
-        target_column,
-        contract.split,
-        train_fraction,
-        val_fraction,
+        _SMILES_COLUMN,
+        _TARGET_COLUMN,
+        _SPLIT_NAME,
+        _TRAIN_FRACTION,
+        _VAL_FRACTION,
     )
 
 
@@ -378,7 +266,7 @@ def _load_member_artifact(path: str) -> dict[str, Any]:
         return json.load(handle)
 
 
-def _evaluate_qm9_ensemble(contract: ProjectContract, config: dict[str, Any], prior_results: list[dict[str, Any]]) -> dict[str, Any]:
+def _evaluate_qm9_ensemble(config: dict[str, Any], prior_results: list[dict[str, Any]]) -> dict[str, Any]:
     member_rows = [row for row in prior_results if row["fingerprint"] in config["members"]]
     if len(member_rows) != len(config["members"]):
         raise ValueError("Ensemble members are missing from prior completed results.")
@@ -394,30 +282,28 @@ def _evaluate_qm9_ensemble(contract: ProjectContract, config: dict[str, Any], pr
     artifact_payload = {
         "model_family": "ensemble",
         "member_fingerprints": config["members"],
-        "metric_name": contract.metric,
+        "metric_name": _METRIC_NAME,
         "metric_value": metric_value,
         "val_predictions": combined.tolist(),
         "val_targets": val_targets.tolist(),
         "weights": weights.tolist(),
     }
     return {
-        "metric_name": contract.metric,
+        "metric_name": _METRIC_NAME,
         "metric_value": round(metric_value, 6),
         "status": "completed",
         "artifact_payload": artifact_payload,
     }
 
 
-def _evaluate_qm9_config(
-    contract: ProjectContract,
+def evaluate_config(
     config: dict[str, Any],
     prior_results: list[dict[str, Any]],
 ) -> dict[str, Any]:
     if config["model_family"] == "ensemble":
-        return _evaluate_qm9_ensemble(contract, config, prior_results)
+        return _evaluate_qm9_ensemble(config, prior_results)
 
-    smiles, targets = _load_qm9_dataset(contract)
-    train, val, _test = _split_qm9(smiles, targets, contract)
+    train, val, _test = _split_qm9()
     pipeline = _build_qm9_pipeline(config)
 
     pipeline.fit(train.smiles, train.targets)
@@ -426,7 +312,7 @@ def _evaluate_qm9_config(
 
     artifact_payload = {
         "feature_view": config["feature_view"],
-        "metric_name": contract.metric,
+        "metric_name": _METRIC_NAME,
         "metric_value": round(metric_value, 6),
         "model_family": config["model_family"],
         "num_train": int(len(train.smiles)),
@@ -435,8 +321,39 @@ def _evaluate_qm9_config(
         "val_targets": val.targets.tolist(),
     }
     return {
-        "metric_name": contract.metric,
+        "metric_name": _METRIC_NAME,
         "metric_value": round(metric_value, 6),
         "status": "completed",
         "artifact_payload": artifact_payload,
     }
+
+
+def canonicalize_config(config: dict[str, Any]) -> dict[str, Any]:
+    canonical = json.loads(json.dumps(config))
+    model_family = canonical.get("model_family")
+    if model_family in {"ridge", "elasticnet"}:
+        canonical["seed"] = "deterministic"
+    return canonical
+
+
+def choose_feature_set(rng: random.Random) -> str:
+    return rng.choice(list(FEATURE_SET_PENALTY))
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 standalone entrypoint — agents edit this file, the framework runs
+# it as a subprocess and parses the printed metric lines.
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    _config = {
+        "model_family": "hist_gb",
+        "feature_view": "hybrid",
+        "feature_params": {"ngram_range": [2, 4], "max_features": 8000},
+        "params": {"learning_rate": 0.08, "max_depth": 7, "max_leaf_nodes": 31},
+        "seed": 42,
+    }
+
+    _result = evaluate_config(_config, [])
+    print(f"metric_name: {_result['metric_name']}")
+    print(f"metric_value: {_result['metric_value']:.6f}")

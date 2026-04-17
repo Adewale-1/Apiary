@@ -1,105 +1,138 @@
 # Autonomous Research Community
 
-This repository is a Phase 1 scaffold for autonomous experiment communities.
-
-The current scope is intentionally narrow:
-
-- a project-specific experiment runner executes structured configs
-- LLM subagents coordinate through a shared file-based registry
-- completed results are immutable records
-- the leaderboard is rebuilt from result files
-- the experiment runner works without `program.md`
-
-For interactive Codex or Claude Code usage, the intended path is to let the AI
-itself decide what to try next and use `execute_config(...)` as the execution primitive. See
-[`BEGIN_EXPERIMENT_LOOP.md`](/Users/adewaleadenle/Downloads/Dev/Co_autoresearch/BEGIN_EXPERIMENT_LOOP.md).
-
-The included `research_community/projects.py` is only one example project
-adapter. A user can swap it out for another experiment runner such as `train.py`
-or another ML project, update the project contract and markdown instructions,
-and reuse the same shared-memory orchestration layer.
-
-The active experiment runner is declared in `project.toml`:
-
-```toml
-[runner]
-entry = "research_community.projects"
-evaluate = "evaluate_config"
-canonicalize = "canonicalize_config"
-```
-
-`entry` can be either an importable module path such as
-`"research_community.projects"` or a file path such as `"train.py"`, as long as
-that target defines the configured callables.
+A scaffold for running multiple LLM research agents in parallel on the same
+experiment, with a shared file-based registry that prevents duplicate work and
+tracks all results.
 
 ## Layout
 
 ```text
+projects.py              ← your experiment runner (edit this for your project)
+autoresearch.toml        ← orchestration config (metric, objective, runner entry)
+SCOPE.md                 ← what agents may and may not edit
+program.md               ← agent behavior contract
+BEGIN_EXPERIMENT_LOOP.md ← loop entry instructions
+
 research_community/
-  agent.py
-  contracts.py
-  leaderboard.py
-  projects.py
-  registry.py
-program.md
-project.toml
+  agent.py               ← execution primitives (config search + code-editing search)
+  contracts.py           ← contract loaded from autoresearch.toml
+  leaderboard.py         ← derived ranking rebuilt from results
+  registry.py            ← shared claims / results memory
+  runners.py             ← resolves and calls the user-supplied runner
+
+registry/
+  claims/                ← live experiment claims (TTL-based leases)
+  results/               ← immutable per-experiment result records
+  leaderboard/           ← snapshot.json rebuilt after every experiment
+
+runs/                    ← per-agent artifact files
 ```
 
-## Architecture
+## Two execution modes
 
-- [`research_community/projects.py`](/Users/adewaleadenle/Downloads/Dev/Co_autoresearch/research_community/projects.py): example standalone experiment runner
-- [`research_community/agent.py`](/Users/adewaleadenle/Downloads/Dev/Co_autoresearch/research_community/agent.py): shared execution primitive for one structured config
-- [`research_community/runners.py`](/Users/adewaleadenle/Downloads/Dev/Co_autoresearch/research_community/runners.py): resolves the project-declared runner module or file
-- [`research_community/registry.py`](/Users/adewaleadenle/Downloads/Dev/Co_autoresearch/research_community/registry.py): shared claims/results memory
-- [`research_community/leaderboard.py`](/Users/adewaleadenle/Downloads/Dev/Co_autoresearch/research_community/leaderboard.py): derived ranking
-- [`program.md`](/Users/adewaleadenle/Downloads/Dev/Co_autoresearch/program.md) and [`BEGIN_EXPERIMENT_LOOP.md`](/Users/adewaleadenle/Downloads/Dev/Co_autoresearch/BEGIN_EXPERIMENT_LOOP.md): agent behavior contract
+### Config search — `execute_config`
 
-The core design is the shared memory and ranking protocol, not a CLI.
+The agent proposes a JSON config. The framework calls `evaluate_config` in
+your runner, records the result, and rebuilds the leaderboard. No files are
+modified.
 
-## Quick start
+### Code-editing search — `execute_code_experiment`
 
-Use Codex or Claude Code on the repo and prompt:
+The agent reads `SCOPE.md`, edits the mutable files (e.g. `projects.py`), then
+calls `execute_code_experiment`. The framework:
+
+1. Fingerprints the uncommitted diff to deduplicate across agents.
+2. Runs the configured shell command (`python projects.py`).
+3. Parses the metric from stdout.
+4. Decides **keep** (metric improved → commit) or **discard** (metric did not
+   improve → `git checkout -- .`).
+5. Writes an immutable result and rebuilds the leaderboard.
+
+Agents using `execute_code_experiment` must run in **separate git worktrees**
+so file edits do not interfere.
+
+## Result statuses
+
+| Status | Meaning |
+| ------ | ------- |
+| `completed` | Config run that produced a metric |
+| `keep` | Code-editing run — metric improved, change committed |
+| `discard` | Code-editing run — metric did not improve, change reverted |
+| `failed` | Any run — crash, timeout, or metric not parseable |
+
+`discard` results appear in the registry so agents know the idea was tried —
+they are excluded from the leaderboard ranking.
+
+## Bringing your own project
+
+Copy `research_community/` and the four `.md` files into your project, then:
+
+### 1. Create `autoresearch.toml`
+
+Minimum required fields:
+
+```toml
+[autoresearch]
+name      = "my-experiment"
+metric    = "val_loss"
+objective = "minimize"   # or "maximize"
+
+[runner]
+entry = "train.py"
+```
+
+For code-editing search, add:
+
+```toml
+[code_experiment]
+run_command    = "python train.py"
+metric_pattern = "^metric_value:\\s+([0-9.]+)"
+editable_files = ["train.py"]
+```
+
+All other fields (`registry_dir`, `artifact_dir`, `claim_ttl_seconds`,
+`leaderboard_limit`, `git_sync`, `search_groups`) have sensible defaults.
+
+### 2. Write your runner (`train.py` or `projects.py`)
+
+Your runner is a completely standalone Python file — **no framework imports**.
+
+**For `execute_config`** — expose `evaluate_config`:
+
+```python
+def evaluate_config(config: dict, prior_results: list[dict]) -> dict:
+    # train / evaluate your model using values from config
+    return {"metric_name": "val_loss", "metric_value": 0.312, "status": "completed"}
+
+def canonicalize_config(config: dict) -> dict:  # optional — for deduplication
+    return config
+```
+
+**For `execute_code_experiment`** — just print the metric to stdout:
+
+```python
+if __name__ == "__main__":
+    # ... train / evaluate ...
+    print(f"metric_value: {val_loss:.6f}")
+```
+
+### 3. Update `SCOPE.md`
+
+Replace the placeholder sections with your editable files, frozen files, and
+objective. Agents read this before every proposal.
+
+### 4. Start the experiment loop
 
 ```text
 Read BEGIN_EXPERIMENT_LOOP.md and start the experiment loop.
 ```
 
-The execution primitive can be called directly from Python:
+## Key design properties
 
-```python
-from research_community.agent import AgentSettings, execute_config
-from research_community.contracts import load_project_contract
-from research_community.registry import ExperimentRegistry
-
-contract = load_project_contract("project.toml")
-registry = ExperimentRegistry(contract)
-settings = AgentSettings(
-    agent_id="agent-001",
-    branch="autoresearch/runtag-agent-001",
-    search_group="group-a",
-    max_experiments=1,
-)
-config = {...}
-execute_config(contract, registry, settings, config)
-```
-
-Before launching agents, place a QM9 CSV at `data/qm9.csv`. The file should
-include at minimum:
-
-- a `smiles` column
-- the selected regression target column, such as `gap`
-
-## What is implemented
-
-- Atomic claim creation using `O_CREAT | O_EXCL`
-- Claim expiration through TTL-based leases
-- Immutable result files, one file per completed run
-- A derived leaderboard rebuilt from the results directory
-- A direct execution primitive for Codex/Claude subagents to run their own structured configs
-- An example QM9 regression runner in `projects.py`
-- A reusable `program.md` that can be adapted per project
-
-## What is next
-
-- Add worktree-backed agents and orchestrated synchronization
-- Later, add autonomous code-editing agents on top of the structured config flow
+- Atomic claim creation via `os.link` — one agent wins per fingerprint.
+- Claim TTL with automatic heartbeat — stale claims expire without orphaning work.
+- Immutable result files named `{fingerprint}__{run_id}.json` — safe concurrent writes.
+- Leaderboard rebuilt by scanning results — no shared append-only file.
+- `discard` status records tried-and-reverted ideas, preventing duplicate exploration.
+- Optional git sync (`git_sync = true`) — each agent pushes results to a dedicated remote branch.
+- Runner is fully standalone — no framework imports required in your code.

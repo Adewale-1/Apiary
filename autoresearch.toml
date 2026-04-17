@@ -1,0 +1,36 @@
+[autoresearch]
+name = "qm9-molecular-property-regression"
+metric = "mae"
+objective = "minimize"
+registry_dir = "registry"
+artifact_dir = "runs"
+claim_ttl_seconds = 1800
+leaderboard_limit = 10
+git_sync = false
+
+[runner]
+entry = "projects.py"
+evaluate = "evaluate_config"
+canonicalize = "canonicalize_config"
+
+[search]
+default_seed_pool = [7, 13, 21, 42]
+
+[code_experiment]
+run_command = "python projects.py"
+metric_pattern = "^metric_value:\\s+([0-9.]+)"
+log_file = "run.log"
+timeout_seconds = 300
+editable_files = ["projects.py"]
+frozen_files = [
+  "autoresearch.toml",
+  "SCOPE.md",
+  "program.md",
+  "BEGIN_EXPERIMENT_LOOP.md",
+  "research_community/agent.py",
+  "research_community/code_agent.py",
+  "research_community/contracts.py",
+  "research_community/leaderboard.py",
+  "research_community/registry.py",
+  "research_community/runners.py",
+]
