@@ -89,7 +89,10 @@ Step 2 — Ask me ONLY the questions you cannot infer from the code:
   If (b) or (c):
     - Map this to code-editing search.
     - Ask: "How is the runner invoked from the shell?
-            (e.g. `python train.py`, `uv run train.py`)"
+            (e.g. `python train.py`, `uv run train.py`)
+            — note: Apiary auto-resolves a leading `python`/`python3` to the
+            interpreter that launched the loop, so dependency mismatches
+            across multiple Pythons are usually a non-issue."
     - Ask: "Which files should agents be allowed to MODIFY?
             (typically the runner itself; sometimes a feature module too)"
     - Ask: "Which files should agents NEVER touch?
@@ -97,8 +100,21 @@ Step 2 — Ask me ONLY the questions you cannot infer from the code:
             cross-experiment comparison)"
     - If (c): also enable config search, no extra questions needed.
 
+  Then run a parent-repo sanity check:
+    Run `git rev-parse --show-toplevel` from the project root. If the output
+    is NOT the project root itself (i.e., the project is nested inside a
+    larger repo), warn me clearly. Code-editing search will refuse to run in
+    that situation unless agents are placed in dedicated worktrees rooted at
+    the project — which Apiary will enforce at runtime.
+
 Step 3 — Generate apiary.toml at the repo root with:
   - [apiary] name, metric, objective
+  - If code-editing search is enabled, also set:
+      registry_dir = "<absolute path to project>/registry"
+      artifact_dir = "<absolute path to project>/runs"
+    Absolute paths are required so all per-agent worktrees write to the same
+    shared registry. Relative paths resolve PER WORKTREE and would silently
+    fragment the shared memory across agents.
   - [runner] entry pointing at the runner file
   - [code_experiment] (only if code-editing search was requested) with
     run_command, metric_pattern, editable_files, frozen_files
@@ -175,15 +191,25 @@ Add this section only if you want code-editing agents (where the agent edits
 your runner directly instead of proposing JSON configs):
 
 ```toml
+# When code-editing search is on AND agents run in worktrees, set these to
+# ABSOLUTE paths so every worktree writes to the same shared registry.
+# Relative paths resolve per worktree and silently fragment the memory.
+registry_dir = "/abs/path/to/project/registry"
+artifact_dir = "/abs/path/to/project/runs"
+
 [code_experiment]
 run_command    = "python train.py"
 metric_pattern = "^metric_value:\\s+([0-9.]+)"
 editable_files = ["train.py"]
 ```
 
-All other fields (`registry_dir`, `artifact_dir`, `claim_ttl_seconds`,
-`leaderboard_limit`, `git_sync`, `search_groups`) have defaults and are
-optional.
+A leading `python` or `python3` in `run_command` is auto-resolved at runtime
+to the interpreter that launched Apiary (`sys.executable`), so you don't
+need to hardcode paths like `/Library/Frameworks/.../python3` even when the
+shell's bare `python` lacks your project's deps.
+
+All other fields (`claim_ttl_seconds`, `leaderboard_limit`, `git_sync`,
+`search_groups`) have defaults and are optional.
 
 ### Step 3 — Write your runner
 
@@ -237,6 +263,18 @@ Agents using `execute_code_experiment` must each run in a **separate git
 worktree** so they don't trample each other's edits to shared files. Same
 applies if `git_sync = true`.
 
+First, sanity-check that the project directory **is** the git top-level:
+
+```bash
+git rev-parse --show-toplevel
+# should print the project's absolute path
+```
+
+If it prints the path of an outer monorepo, code-editing search will refuse
+to run from the project subdirectory. The fix is the same — create a
+worktree rooted at the project — but you may want to relocate the project
+into its own repo first if the monorepo nesting is unintentional.
+
 Create one worktree per agent:
 
 ```bash
@@ -247,7 +285,10 @@ git worktree add worktrees/agent-002 -b apiary/agent-002
 
 The worktrees share the same `registry/` via the filesystem (claims and
 results are visible across all of them), but each has its own copy of the
-mutable files.
+mutable files. **This is why `registry_dir` and `artifact_dir` must be
+absolute paths in `apiary.toml`** — otherwise each worktree's relative
+`./registry` resolves to a different directory and the shared memory
+fragments silently.
 
 ### Step 6 — Start the loop
 

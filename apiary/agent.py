@@ -5,7 +5,9 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import shlex
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -105,11 +107,55 @@ def _revert_edits(root_dir: Path, editable_files: tuple[str, ...]) -> None:
 def _fingerprint_diff(diff: str) -> str:
     return hashlib.sha256(diff.encode("utf-8")).hexdigest()[:16]
 
+def _resolve_interpreter(run_command: str) -> str:
+    """Replace a leading `python`/`python3` with the running interpreter path.
+
+    The toml typically contains "python train.py" for portability, but on a
+    machine with multiple Pythons the shell's bare `python` may not have the
+    project's deps. By substituting `sys.executable` we guarantee we run with
+    the same interpreter that loaded Apiary — which by construction has
+    whatever the user's runner needs.
+    """
+    return re.sub(
+        r"^(python3?)(\s|$)",
+        lambda m: f"{shlex.quote(sys.executable)}{m.group(2)}",
+        run_command,
+    )
+
+
+def _assert_project_is_repo_top(root_dir: Path) -> None:
+    """Refuse to run code-editing search from a sub-directory of a larger repo.
+
+    If the project sits inside a parent monorepo, `git diff HEAD` walks up to
+    the parent's index and produces fingerprints contaminated by unrelated
+    edits elsewhere. The cure is per-agent worktrees rooted at the project,
+    which is what we expect callers to set up. This check fails fast with a
+    clear message instead of silently producing bogus fingerprints.
+    """
+    proc = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=str(root_dir),
+        capture_output=True, text=True, check=True,
+    )
+    toplevel = Path(proc.stdout.strip()).resolve()
+    if toplevel != root_dir.resolve():
+        raise RuntimeError(
+            f"Apiary refuses to run code-editing search:\n"
+            f"  project root: {root_dir.resolve()}\n"
+            f"  git toplevel: {toplevel}\n"
+            "These must match. The project sits inside a larger repository, "
+            "so `git diff HEAD` would capture unrelated changes from the "
+            "parent. Create a per-agent git worktree rooted at the project "
+            "and run from there — see README Step 5."
+        )
+
+
 def _run_command(root_dir: Path, run_command: str, log_file: str, timeout: int) -> tuple[str, bool]:
     log_path = root_dir / log_file
+    resolved = _resolve_interpreter(run_command)
     with log_path.open("w", encoding="utf-8") as log_handle:
         proc = subprocess.Popen(
-            run_command,
+            resolved,
             shell=True,
             cwd=str(root_dir),
             stdout=log_handle,
@@ -296,6 +342,8 @@ def execute_code_experiment(
             "apiary.toml has no [code_experiment] section. "
             "Add one before using execute_code_experiment."
         )
+
+    _assert_project_is_repo_top(contract.root_dir)
 
     diff = _git_diff(contract.root_dir)
     if not diff.strip():
