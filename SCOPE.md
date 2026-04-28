@@ -3,33 +3,31 @@
 Read this file before proposing or executing any experiment.
 It defines what agents are allowed to change and what is locked.
 
-<!-- ================================================================
-  SETUP: Replace the sections below with your project's specifics.
-  The orchestration layer (research_community/) is never edited here.
-================================================================ -->
+  <!-- SETUP: Replace the sections below with your project's specifics.
+  The orchestration layer (apiary/) is never edited here. -->
+
 
 ## Editable files
 
-The following files may be freely modified by code-editing agents (Phase 2):
+The following files may be freely modified by code-editing agents:
 
-- `projects.py` — the experiment runner. All model architecture, feature
-  engineering, hyperparameters, and training logic live here. Change anything
-  inside it.
+- `<your-runner>.py` — the experiment runner. All model architecture, feature
+  engineering, hyperparameters, and training logic live here.
 
 ## Frozen files — do not modify
 
 - `SCOPE.md` — this file
 - `program.md` — agent behavior contract
 - `BEGIN_EXPERIMENT_LOOP.md` — loop entry instructions
-- `autoresearch.toml` — orchestration configuration
-- `research_community/` — the entire orchestration package
-- `data/` — raw datasets
+- `apiary.toml` — orchestration configuration
+- `apiary/` — the entire orchestration package
+<!-- Add the files or directories that should not be editted -->
 
 ## Objective
 
-<!-- Replace this with your project's goal and metric. -->
+<!-- One sentence describing the goal and the metric. -->
 
-Minimize **MAE** on the QM9 molecular property regression benchmark (target: `gap`).
+Minimize **`<metric>`** on the **`<benchmark>`** task.
 
 ## Constraints
 

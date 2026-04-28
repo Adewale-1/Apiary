@@ -3,11 +3,11 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "autonomous-research-community"
+name = "apiary"
 version = "0.1.0"
-description = "Phase 1 scaffold for autonomous experiment agents."
+description = "Multi-agent orchestration scaffold for autonomous research experiments."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 
 [tool.setuptools]
-packages = ["research_community"]
+packages = ["apiary"]

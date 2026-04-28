@@ -1,4 +1,4 @@
-# autoresearch-community
+# apiary
 
 Multiple LLM researchers run autonomous ML experiments in parallel while
 sharing memory of what has already been tried.
@@ -9,13 +9,13 @@ To set up a new experiment run, work with the user to:
 
 1. Agree on a run tag.
    Propose a tag based on today's date or the user's preference. This tag is
-   used in branch names such as `autoresearch/<tag>-agent-001`.
+   used in branch names such as `apiary/<tag>-agent-001`.
 2. Ask how many subagents to spin up.
    If the user did not specify a number, ask one short question:
    "How many subagents should I spin up?"
 3. Read the in-scope files for context:
    - `README.md`
-   - `autoresearch.toml`
+   - `apiary.toml`
    - `SCOPE.md`
    - `program.md`
 4. Verify any data dependencies described in `SCOPE.md` exist.
@@ -38,11 +38,11 @@ The agent proposes a JSON config. The framework calls `evaluate_config` in
 the runner file and records the result. No files are modified.
 
 ```python
-from research_community.agent import AgentSettings, execute_config
-from research_community.contracts import load_project_contract
-from research_community.registry import ExperimentRegistry
+from apiary.agent import AgentSettings, execute_config
+from apiary.contracts import load_project_contract
+from apiary.registry import ExperimentRegistry
 
-contract = load_project_contract("autoresearch.toml")
+contract = load_project_contract("apiary.toml")
 registry = ExperimentRegistry(contract)
 settings = AgentSettings(agent_id="<id>", branch="<branch>", search_group="<group>")
 execute_config(contract, registry, settings, config)
@@ -62,11 +62,11 @@ primitive. The framework runs the configured shell command, parses the metric,
 commits (if improved) or reverts (if not), and records the result.
 
 ```python
-from research_community.agent import AgentSettings, execute_code_experiment
-from research_community.contracts import load_project_contract
-from research_community.registry import ExperimentRegistry
+from apiary.agent import AgentSettings, execute_code_experiment
+from apiary.contracts import load_project_contract
+from apiary.registry import ExperimentRegistry
 
-contract = load_project_contract("autoresearch.toml")
+contract = load_project_contract("apiary.toml")
 registry = ExperimentRegistry(contract)
 settings = AgentSettings(agent_id="<id>", branch="<branch>", search_group="<group>")
 # --- edit the mutable files listed in SCOPE.md here ---
@@ -100,7 +100,7 @@ the idea is permanently recorded so no other agent wastes time on it.
 - Modify files listed as frozen in `SCOPE.md`.
 - Install new dependencies.
 - Bypass the registry by running experiments without claiming them.
-- Edit the orchestration layer (`research_community/`).
+- Edit the orchestration layer (`apiary/`).
 
 ## The experiment loop
 

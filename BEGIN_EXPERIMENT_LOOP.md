@@ -7,10 +7,10 @@ user says:
 
 ## Assistant behavior
 
-1. Read `program.md`, `SCOPE.md`, and `autoresearch.toml`.
+1. Read `program.md`, `SCOPE.md`, and `apiary.toml`.
 1. Ask the user one short question if the number of subagents is not specified:
    "How many subagents should I spin up?"
-1. Determine which execution mode to use from `autoresearch.toml`:
+1. Determine which execution mode to use from `apiary.toml`:
    - **`execute_config`** — `[runner]` is set, no `[code_experiment]` section →
      agents propose JSON configs, no files are modified.
    - **`execute_code_experiment`** — `[code_experiment]` is set → agents edit
@@ -24,11 +24,11 @@ user says:
 ## Config search primitive
 
 ```python
-from research_community.agent import AgentSettings, execute_config
-from research_community.contracts import load_project_contract
-from research_community.registry import ExperimentRegistry
+from apiary.agent import AgentSettings, execute_config
+from apiary.contracts import load_project_contract
+from apiary.registry import ExperimentRegistry
 
-contract = load_project_contract("autoresearch.toml")
+contract = load_project_contract("apiary.toml")
 registry = ExperimentRegistry(contract)
 settings = AgentSettings(
     agent_id="<agent-id>",
@@ -43,11 +43,11 @@ execute_config(contract, registry, settings, config)
 Edit the mutable files listed in `SCOPE.md` first, then call:
 
 ```python
-from research_community.agent import AgentSettings, execute_code_experiment
-from research_community.contracts import load_project_contract
-from research_community.registry import ExperimentRegistry
+from apiary.agent import AgentSettings, execute_code_experiment
+from apiary.contracts import load_project_contract
+from apiary.registry import ExperimentRegistry
 
-contract = load_project_contract("autoresearch.toml")
+contract = load_project_contract("apiary.toml")
 registry = ExperimentRegistry(contract)
 settings = AgentSettings(
     agent_id="<agent-id>",
